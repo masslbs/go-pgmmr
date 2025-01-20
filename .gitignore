@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2025 Mass Labs
+#
+# SPDX-License-Identifier: MIT
+
+.pre-commit-config.yaml
+tmp/
