@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: MIT
 
-module github.com/cryptix/go-pgmmr
+module github.com/masslbs/go-pgmmr
 
 go 1.23.4
 

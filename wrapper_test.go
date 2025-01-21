@@ -11,9 +11,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/cryptix/go-pgmmr"
 	mmr "github.com/datatrails/go-datatrails-merklelog/mmr"
 	"github.com/jackc/pgx/v5"
+	"github.com/masslbs/go-pgmmr"
 	"github.com/peterldowns/testy/assert"
 )
 
