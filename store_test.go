@@ -122,14 +122,12 @@ func testStore(t *testing.T, db mmr.NodeAppender, mmrSize uint64) {
 	for iLeaf := uint64(0); iLeaf < numLeafs; iLeaf++ {
 		iNode := mmr.MMRIndex(iLeaf)
 
-		fmt.Println("making proof for", mmrSize, iNode)
 		proof, err := mmr.InclusionProofBagged(mmrSize, db, hasher, iNode)
 		assert.Nil(t, err)
 
 		nodeHash, err := db.Get(iNode)
 		assert.Nil(t, err)
 
-		fmt.Println("verifying proof for", mmrSize, nodeHash[:4], iNode, len(proof), root[:4])
 		if !mmr.VerifyInclusionBagged(mmrSize, hasher, nodeHash, iNode, proof, root) {
 			t.Logf("%d %d VerifyInclusion() failed\n", iNode, iLeaf)
 		} else {

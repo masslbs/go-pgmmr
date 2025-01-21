@@ -17,7 +17,9 @@ import (
 	"github.com/peterldowns/testy/assert"
 )
 
-func TestWrapper(t *testing.T) {
+var hashFn = sha256.New
+
+func TestWrapperPostgres(t *testing.T) {
 	dbUrl := os.Getenv("DATABASE_URL")
 	if dbUrl == "" {
 		t.Skip("DATABASE_URL not set")
@@ -26,11 +28,9 @@ func TestWrapper(t *testing.T) {
 	connPool, err := pgx.Connect(context.Background(), dbUrl)
 	assert.Nil(t, err)
 
-	hasher := sha256.New()
+	hasher := hashFn()
 
 	const testId = 42 * 123
-
-	t.Logf("testId: %d", testId)
 
 	// delete previous values and tree nodes for clean slate
 	_, err = connPool.Exec(context.Background(), "DELETE FROM pgmmr_values WHERE tree_id = $1", testId)
@@ -41,16 +41,27 @@ func TestWrapper(t *testing.T) {
 	tree, err := pgmmr.NewPostgresVerifierTree(connPool, hasher, testId)
 	assert.Nil(t, err)
 
-	// roll some random values and save their indices
-	const mmrSize = 8
-	// var val []byte
+	testWrapper(t, tree)
+}
+
+func TestWrapperInMemory(t *testing.T) {
+	db := pgmmr.NewInMemoryVerifierTree(hashFn(), 16)
+	testWrapper(t, db)
+}
+
+func testWrapper(t *testing.T, tree pgmmr.VerifierTree) {
+	const mmrSize = 8 // take care to use a valid mmr size
+
 	type testValue struct {
 		idx uint64
 		val []byte
 	}
 	numLeafs := mmr.LeafCount(mmrSize)
 	testValues := make([]testValue, numLeafs)
-	// for i := 0; i < size; i++ {
+
+	// roll some random values and save their indices
+	// var val []byte
+	// for i := 0; i < numLeafs; i++ {
 	// 	val = make([]byte, 32)
 	// 	rand.Read(val)
 	// 	idx, err := tree.Add(val)
@@ -68,7 +79,10 @@ func TestWrapper(t *testing.T) {
 
 	root, err := tree.Root()
 	assert.Nil(t, err)
+	assert.Equal(t, 32, len(root))
 	t.Logf("root: %x", root)
+
+	hasher := hashFn()
 
 	// ensure we can get the values back
 	for _, tv := range testValues {

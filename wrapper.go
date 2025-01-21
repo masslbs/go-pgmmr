@@ -32,12 +32,22 @@ type VerifierTree interface {
 }
 
 type Proof struct {
-	Root      []byte
 	NodeIndex uint64
+	TreeSize  uint64
+	Root      []byte
 	Path      [][]byte
 }
 
-func NewPostgresVerifierTree(db *pgx.Conn, hasher hash.Hash, id uint64) (VerifierTree, error) {
+type PostgresVerifierTree struct {
+	db     *pgx.Conn
+	hasher hash.Hash
+	treeId uint64
+	nodes  *PostgresNodeStore
+}
+
+var _ VerifierTree = (*PostgresVerifierTree)(nil)
+
+func NewPostgresVerifierTree(db *pgx.Conn, hasher hash.Hash, id uint64) (*PostgresVerifierTree, error) {
 	nodes, err := NewPostgresNodeStore(db, id)
 	if err != nil {
 		return nil, err
@@ -48,13 +58,6 @@ func NewPostgresVerifierTree(db *pgx.Conn, hasher hash.Hash, id uint64) (Verifie
 		treeId: id,
 		nodes:  nodes,
 	}, nil
-}
-
-type PostgresVerifierTree struct {
-	db     *pgx.Conn
-	hasher hash.Hash
-	treeId uint64
-	nodes  *PostgresNodeStore
 }
 
 func (t *PostgresVerifierTree) Add(value []byte) (uint64, error) {
@@ -103,11 +106,7 @@ func (t *PostgresVerifierTree) Root() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	root, err := mmr.GetRoot(count, t.nodes, t.hasher)
-	if err != nil {
-		return nil, err
-	}
-	return root, nil
+	return mmr.GetRoot(count, t.nodes, t.hasher)
 }
 
 func (t *PostgresVerifierTree) MakeProof(i uint64) (*Proof, error) {
@@ -125,6 +124,7 @@ func (t *PostgresVerifierTree) MakeProof(i uint64) (*Proof, error) {
 		return nil, err
 	}
 	return &Proof{
+		TreeSize:  count,
 		Root:      root,
 		NodeIndex: mmrIndex,
 		Path:      proof,
@@ -135,6 +135,9 @@ func (t *PostgresVerifierTree) VerifyProof(proof Proof) error {
 	count, err := t.nodeCount()
 	if err != nil {
 		return err
+	}
+	if proof.TreeSize > count {
+		return fmt.Errorf("proof tree size %d is greater than current tree size %d", proof.TreeSize, count)
 	}
 	node, err := t.nodes.Get(proof.NodeIndex)
 	if err != nil {
@@ -154,4 +157,96 @@ func (t *PostgresVerifierTree) nodeCount() (uint64, error) {
 		return 0, err
 	}
 	return count, nil
+}
+
+type InMemoryVerifierTree struct {
+	hasher hash.Hash
+	nodes  *InMemoryNodeStore
+	values map[uint64][]byte
+}
+
+var _ VerifierTree = (*InMemoryVerifierTree)(nil)
+
+// Cant grow, mostly intended for testing / vector generation
+func NewInMemoryVerifierTree(hasher hash.Hash, size uint64) *InMemoryVerifierTree {
+	return &InMemoryVerifierTree{
+		hasher: hasher,
+		nodes:  &InMemoryNodeStore{nodes: make([][]byte, size)},
+		values: make(map[uint64][]byte),
+	}
+}
+
+func (t *InMemoryVerifierTree) Add(value []byte) (uint64, error) {
+	h := t.hasher
+	h.Reset()
+	h.Write(value)
+	data := h.Sum(nil)
+	newSize, err := mmr.AddHashedLeaf(t.nodes, t.hasher, data)
+	if err != nil {
+		return 0, err
+	}
+	// AddHashedLeaf returns the new size of the tree
+	// which is equal to the last node _position_ in the tree
+	leafIdx := mmr.LeafIndex(newSize - 1)
+	if _, ok := t.values[leafIdx]; ok {
+		return 0, fmt.Errorf("value already exists at index %d", leafIdx)
+	}
+	t.values[leafIdx] = value
+	return leafIdx, nil
+}
+
+func (t *InMemoryVerifierTree) GetNode(i uint64) ([]byte, error) {
+	mmrIndex := mmr.MMRIndex(i)
+	return t.nodes.Get(mmrIndex)
+}
+
+func (t *InMemoryVerifierTree) GetValue(i uint64) ([]byte, error) {
+	value, ok := t.values[i]
+	if !ok {
+		return nil, fmt.Errorf("value not found at index %d", i)
+	}
+	return value, nil
+}
+
+func (t *InMemoryVerifierTree) Root() ([]byte, error) {
+	count := t.nodeCount()
+	return mmr.GetRoot(count, t.nodes, t.hasher)
+}
+
+func (t *InMemoryVerifierTree) MakeProof(i uint64) (*Proof, error) {
+	count := t.nodeCount()
+	mmrIndex := mmr.MMRIndex(i)
+	proof, err := mmr.InclusionProofBagged(count, t.nodes, t.hasher, mmrIndex)
+	if err != nil {
+		return nil, err
+	}
+	root, err := t.Root()
+	if err != nil {
+		return nil, err
+	}
+	return &Proof{
+		TreeSize:  count,
+		Root:      root,
+		NodeIndex: mmrIndex,
+		Path:      proof,
+	}, nil
+}
+
+func (t *InMemoryVerifierTree) VerifyProof(proof Proof) error {
+	count := t.nodeCount()
+	if proof.TreeSize > count {
+		return fmt.Errorf("proof tree size %d is greater than current tree size %d", proof.TreeSize, count)
+	}
+	node, err := t.nodes.Get(proof.NodeIndex)
+	if err != nil {
+		return err
+	}
+	if !mmr.VerifyInclusionBagged(count, t.hasher, node, proof.NodeIndex, proof.Path, proof.Root) {
+		return fmt.Errorf("proof verification for %d failed: %w", proof.NodeIndex, mmr.ErrVerifyInclusionFailed)
+	}
+	return nil
+}
+
+func (t *InMemoryVerifierTree) nodeCount() uint64 {
+	return t.nodes.next
 }
