@@ -5,6 +5,7 @@
 package pgmmr
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -20,7 +21,7 @@ type VerifierTree interface {
 	Add(value []byte) (uint64, error)
 	// GetValue returns the value at the given index.
 	GetValue(i uint64) ([]byte, error)
-	// GetNode returns the node at the given index.
+	// GetNode returns the (hashed) node at the given index.
 	GetNode(i uint64) ([]byte, error)
 
 	// Root returns the root of the tree.
@@ -32,9 +33,9 @@ type VerifierTree interface {
 }
 
 type Proof struct {
+	_         struct{} `cbor:",toarray"`
 	NodeIndex uint64
 	TreeSize  uint64
-	Root      []byte
 	Path      [][]byte
 }
 
@@ -102,7 +103,7 @@ func (t *PostgresVerifierTree) GetValue(i uint64) ([]byte, error) {
 }
 
 func (t *PostgresVerifierTree) Root() ([]byte, error) {
-	count, err := t.nodeCount()
+	count, err := t.nodes.Size()
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +111,7 @@ func (t *PostgresVerifierTree) Root() ([]byte, error) {
 }
 
 func (t *PostgresVerifierTree) MakeProof(i uint64) (*Proof, error) {
-	count, err := t.nodeCount()
+	count, err := t.nodes.Size()
 	if err != nil {
 		return nil, err
 	}
@@ -119,44 +120,15 @@ func (t *PostgresVerifierTree) MakeProof(i uint64) (*Proof, error) {
 	if err != nil {
 		return nil, err
 	}
-	root, err := t.Root()
-	if err != nil {
-		return nil, err
-	}
 	return &Proof{
 		TreeSize:  count,
-		Root:      root,
 		NodeIndex: mmrIndex,
 		Path:      proof,
 	}, nil
 }
 
 func (t *PostgresVerifierTree) VerifyProof(proof Proof) error {
-	count, err := t.nodeCount()
-	if err != nil {
-		return err
-	}
-	if proof.TreeSize > count {
-		return fmt.Errorf("proof tree size %d is greater than current tree size %d", proof.TreeSize, count)
-	}
-	node, err := t.nodes.Get(proof.NodeIndex)
-	if err != nil {
-		return err
-	}
-	if !mmr.VerifyInclusionBagged(count, t.hasher, node, proof.NodeIndex, proof.Path, proof.Root) {
-		return fmt.Errorf("proof verification for %d failed: %w", proof.NodeIndex, mmr.ErrVerifyInclusionFailed)
-	}
-	return nil
-}
-
-func (t *PostgresVerifierTree) nodeCount() (uint64, error) {
-	var count uint64
-	const qry = "SELECT count(*) FROM pgmmr_nodes WHERE tree_id = $1"
-	err := t.db.QueryRow(context.Background(), qry, t.treeId).Scan(&count)
-	if err != nil {
-		return 0, err
-	}
-	return count, nil
+	return verifyPath(t.hasher, proof, t.nodes)
 }
 
 type InMemoryVerifierTree struct {
@@ -216,37 +188,65 @@ func (t *InMemoryVerifierTree) Root() ([]byte, error) {
 func (t *InMemoryVerifierTree) MakeProof(i uint64) (*Proof, error) {
 	count := t.nodeCount()
 	mmrIndex := mmr.MMRIndex(i)
-	proof, err := mmr.InclusionProofBagged(count, t.nodes, t.hasher, mmrIndex)
-	if err != nil {
-		return nil, err
-	}
-	root, err := t.Root()
+	proof, err := mmr.InclusionProof(t.nodes, count-1, mmrIndex)
 	if err != nil {
 		return nil, err
 	}
 	return &Proof{
 		TreeSize:  count,
-		Root:      root,
 		NodeIndex: mmrIndex,
 		Path:      proof,
 	}, nil
 }
 
 func (t *InMemoryVerifierTree) VerifyProof(proof Proof) error {
-	count := t.nodeCount()
-	if proof.TreeSize > count {
-		return fmt.Errorf("proof tree size %d is greater than current tree size %d", proof.TreeSize, count)
-	}
-	node, err := t.nodes.Get(proof.NodeIndex)
-	if err != nil {
-		return err
-	}
-	if !mmr.VerifyInclusionBagged(count, t.hasher, node, proof.NodeIndex, proof.Path, proof.Root) {
-		return fmt.Errorf("proof verification for %d failed: %w", proof.NodeIndex, mmr.ErrVerifyInclusionFailed)
-	}
-	return nil
+	return verifyPath(t.hasher, proof, t.nodes)
 }
 
 func (t *InMemoryVerifierTree) nodeCount() uint64 {
 	return t.nodes.next
+}
+
+type NodeAppenderWithSize interface {
+	mmr.NodeAppender
+	Size() (uint64, error)
+}
+
+func verifyPath(hasher hash.Hash, proof Proof, tree NodeAppenderWithSize) error {
+	count, err := tree.Size()
+	if err != nil {
+		return err
+	}
+
+	if proof.TreeSize > count {
+		return fmt.Errorf("proof tree size %d is greater than current tree size %d", proof.TreeSize, count)
+	}
+
+	if proof.NodeIndex >= count {
+		return fmt.Errorf("proof node index %d is greater than current tree size %d", proof.NodeIndex, count)
+	}
+
+	node, err := tree.Get(proof.NodeIndex)
+	if err != nil {
+		return err
+	}
+
+	accumulator, err := mmr.PeakHashes(tree, proof.TreeSize-1)
+	if err != nil {
+		return err
+	}
+
+	iacc := mmr.PeakIndex(mmr.LeafCount(proof.TreeSize), len(proof.Path))
+	if iacc >= len(accumulator) {
+		return fmt.Errorf("proof peak index %d is greater than accumulator length %d", iacc, len(accumulator))
+	}
+
+	peak := accumulator[iacc]
+	root := mmr.IncludedRoot(hasher, proof.NodeIndex, node, proof.Path)
+
+	ok := bytes.Equal(root, peak)
+	if !ok {
+		return fmt.Errorf("proof verification for %d failed: %w", proof.NodeIndex, mmr.ErrVerifyInclusionFailed)
+	}
+	return nil
 }

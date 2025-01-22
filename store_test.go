@@ -5,6 +5,7 @@
 package pgmmr
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"fmt"
@@ -64,9 +65,11 @@ func TestSmallestSize(t *testing.T) {
 	}
 }
 
+const mmrTestSize = 7
+
 func TestVerifyInMemoryStore(t *testing.T) {
 	db := &InMemoryNodeStore{}
-	const mmrSize uint64 = 8
+	const mmrSize uint64 = mmrTestSize
 	db.nodes = make([][]byte, mmrSize)
 
 	testStore(t, db, mmrSize)
@@ -89,14 +92,14 @@ func TestVerifyPostgresStore(t *testing.T) {
 	store, err := NewPostgresNodeStore(connPool, testTreeId)
 	assert.Nil(t, err)
 
-	testStore(t, store, 8)
+	testStore(t, store, mmrTestSize)
 }
 
-func testStore(t *testing.T, db mmr.NodeAppender, mmrSize uint64) {
+func testStore(t *testing.T, db mmr.NodeAppender, mmrMaxSize uint64) {
 	hasher := sha256.New()
 
-	numLeafs := mmr.LeafCount(mmrSize)
-	assert.Equal(t, mmrSize/2+1, numLeafs)
+	numLeafs := mmr.LeafCount(mmrMaxSize)
+	assert.Equal(t, mmrMaxSize/2+1, numLeafs)
 
 	// fill the tree with some data
 	var lastIdx uint64
@@ -111,29 +114,44 @@ func testStore(t *testing.T, db mmr.NodeAppender, mmrSize uint64) {
 		t.Logf("idx: %02d: %s", idx, input)
 		lastIdx = idx
 	}
-	assert.Equal(t, mmrSize, lastIdx)
+	assert.Equal(t, mmrMaxSize, lastIdx)
 
-	root, err := mmr.GetRoot(mmrSize, db, hasher)
+	root, err := mmr.GetRoot(mmrMaxSize, db, hasher)
 	assert.Nil(t, err)
 	t.Logf("root: %x", root)
 	assert.NotEqual(t, nil, root)
 
-	verifiedOk := uint64(0)
 	for iLeaf := uint64(0); iLeaf < numLeafs; iLeaf++ {
-		iNode := mmr.MMRIndex(iLeaf)
+		mmrIndex := mmr.MMRIndex(iLeaf)
+		t.Log("================")
+		t.Logf("iLeaf: %d", iLeaf)
+		t.Log("================")
 
-		proof, err := mmr.InclusionProofBagged(mmrSize, db, hasher, iNode)
-		assert.Nil(t, err)
+		// s is the size of the mmr at which the leaf is included
+		for s := mmr.FirstMMRSize(mmr.MMRIndex(iLeaf)); s <= mmrMaxSize; s = mmr.FirstMMRSize(s + 1) {
+			t.Logf("s: %d", s)
 
-		nodeHash, err := db.Get(iNode)
-		assert.Nil(t, err)
+			proof, err := mmr.InclusionProof(db, s-1, mmrIndex)
+			assert.Nil(t, err)
+			t.Logf("proof len(): %d", len(proof))
+			nodeHash, err := db.Get(mmrIndex)
+			assert.Nil(t, err)
 
-		if !mmr.VerifyInclusionBagged(mmrSize, hasher, nodeHash, iNode, proof, root) {
-			t.Logf("%d %d VerifyInclusion() failed\n", iNode, iLeaf)
-		} else {
-			t.Logf("%d %d VerifyInclusion() ok\n", iNode, iLeaf)
-			verifiedOk++
+			accumulator, err := mmr.PeakHashes(db, s-1)
+			assert.Nil(t, err)
+			t.Logf("accumulator len(): %d", len(accumulator))
+			iacc := mmr.PeakIndex(mmr.LeafCount(s), len(proof))
+			t.Logf("iacc: %d", iacc)
+			assert.LessThan(t, iacc, len(accumulator))
+
+			peak := accumulator[iacc]
+			root := mmr.IncludedRoot(hasher, mmrIndex, nodeHash, proof)
+
+			ok := bytes.Equal(root, peak)
+			if !ok {
+				t.Logf("%d %d VerifyInclusion() failed\n", mmrIndex, iLeaf)
+			}
+			assert.True(t, ok)
 		}
 	}
-	assert.Equal(t, verifiedOk, numLeafs)
 }

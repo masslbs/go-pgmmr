@@ -62,6 +62,16 @@ func (s *PostgresNodeStore) Get(i uint64) ([]byte, error) {
 	return data, nil
 }
 
+func (s *PostgresNodeStore) Size() (uint64, error) {
+	const qry = "SELECT count(*) FROM pgmmr_nodes WHERE tree_id = $1"
+	var count uint64
+	err := s.db.QueryRow(context.Background(), qry, s.treeId).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 type InMemoryNodeStore struct {
 	nodes [][]byte
 	next  uint64
@@ -80,4 +90,8 @@ func (t *InMemoryNodeStore) Get(i uint64) ([]byte, error) {
 	}
 	// fmt.Printf("Get(%d): %x, len(t.nodes): %d\n", i, t.nodes[i], t.next)
 	return t.nodes[i], nil
+}
+
+func (t *InMemoryNodeStore) Size() (uint64, error) {
+	return t.next, nil
 }
