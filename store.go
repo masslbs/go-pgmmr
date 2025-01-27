@@ -78,7 +78,12 @@ type InMemoryNodeStore struct {
 }
 
 func (t *InMemoryNodeStore) Append(value []byte) (uint64, error) {
-	t.nodes[t.next] = value
+	if t.next >= uint64(len(t.nodes)) {
+		// return 0, fmt.Errorf("out of bounds. %d >= %d", t.next, len(t.nodes))
+		t.nodes = append(t.nodes, value)
+	} else {
+		t.nodes[t.next] = value
+	}
 	// fmt.Printf("appending: store[%02d] = %x\n", t.next, value)
 	t.next++
 	return t.next, nil

@@ -116,7 +116,7 @@ func (t *PostgresVerifierTree) MakeProof(i uint64) (*Proof, error) {
 		return nil, err
 	}
 	mmrIndex := mmr.MMRIndex(i)
-	proof, err := mmr.InclusionProofBagged(count, t.nodes, t.hasher, mmrIndex)
+	proof, err := mmr.InclusionProof(t.nodes, count-1, mmrIndex)
 	if err != nil {
 		return nil, err
 	}
@@ -181,12 +181,18 @@ func (t *InMemoryVerifierTree) GetValue(i uint64) ([]byte, error) {
 }
 
 func (t *InMemoryVerifierTree) Root() ([]byte, error) {
-	count := t.nodeCount()
+	count, err := t.nodes.Size()
+	if err != nil {
+		return nil, err
+	}
 	return mmr.GetRoot(count, t.nodes, t.hasher)
 }
 
 func (t *InMemoryVerifierTree) MakeProof(i uint64) (*Proof, error) {
-	count := t.nodeCount()
+	count, err := t.nodes.Size()
+	if err != nil {
+		return nil, err
+	}
 	mmrIndex := mmr.MMRIndex(i)
 	proof, err := mmr.InclusionProof(t.nodes, count-1, mmrIndex)
 	if err != nil {
@@ -201,10 +207,6 @@ func (t *InMemoryVerifierTree) MakeProof(i uint64) (*Proof, error) {
 
 func (t *InMemoryVerifierTree) VerifyProof(proof Proof) error {
 	return verifyPath(t.hasher, proof, t.nodes)
-}
-
-func (t *InMemoryVerifierTree) nodeCount() uint64 {
-	return t.nodes.next
 }
 
 type NodeAppenderWithSize interface {
