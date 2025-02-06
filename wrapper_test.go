@@ -6,8 +6,8 @@ package pgmmr_test
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
-	"fmt"
 	"os"
 	"testing"
 
@@ -45,12 +45,12 @@ func TestWrapperPostgres(t *testing.T) {
 }
 
 func TestWrapperInMemory(t *testing.T) {
-	db := pgmmr.NewInMemoryVerifierTree(hashFn(), 16)
+	db := pgmmr.NewInMemoryVerifierTree(hashFn(), 8)
 	testWrapper(t, db)
 }
 
 func testWrapper(t *testing.T, tree pgmmr.VerifierTree) {
-	const mmrSize = 8 // take care to use a valid mmr size
+	const mmrSize = 16 // take care to use a valid mmr size
 
 	type testValue struct {
 		idx uint64
@@ -60,21 +60,13 @@ func testWrapper(t *testing.T, tree pgmmr.VerifierTree) {
 	testValues := make([]testValue, numLeafs)
 
 	// roll some random values and save their indices
-	// var val []byte
-	// for i := 0; i < numLeafs; i++ {
-	// 	val = make([]byte, 32)
-	// 	rand.Read(val)
-	// 	idx, err := tree.Add(val)
-	// 	assert.Nil(t, err)
-	// 	testValues[i] = testValue{idx: idx, val: val}
-	// }
-
-	for i := 0; i < int(numLeafs); i++ {
-		input := []byte(fmt.Sprintf("hello %02d", i))
-		idx, err := tree.Add(input)
+	var val []byte
+	for i := uint64(0); i < numLeafs; i++ {
+		val = make([]byte, 32)
+		rand.Read(val)
+		idx, err := tree.Add(val)
 		assert.Nil(t, err)
-		t.Logf("idx: %02d: %s", idx, input)
-		testValues[i] = testValue{idx: idx, val: input}
+		testValues[i] = testValue{idx: idx, val: val}
 		leafCount, err := tree.LeafCount()
 		assert.Nil(t, err)
 		assert.Equal(t, uint64(i+1), leafCount)

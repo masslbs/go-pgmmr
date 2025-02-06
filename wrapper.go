@@ -120,24 +120,11 @@ func (t *PostgresVerifierTree) Root() ([]byte, error) {
 }
 
 func (t *PostgresVerifierTree) MakeProof(i uint64) (*Proof, error) {
-	count, err := t.nodes.Size()
-	if err != nil {
-		return nil, err
-	}
-	mmrIndex := mmr.MMRIndex(i)
-	proof, err := mmr.InclusionProof(t.nodes, count-1, mmrIndex)
-	if err != nil {
-		return nil, err
-	}
-	return &Proof{
-		TreeSize:  count,
-		NodeIndex: mmrIndex,
-		Path:      proof,
-	}, nil
+	return makeProof(t.nodes, i)
 }
 
 func (t *PostgresVerifierTree) VerifyProof(proof Proof) error {
-	return verifyPath(t.hasher, proof, t.nodes)
+	return verifyPath(t.nodes, t.hasher, proof)
 }
 
 type InMemoryVerifierTree struct {
@@ -149,10 +136,10 @@ type InMemoryVerifierTree struct {
 var _ VerifierTree = (*InMemoryVerifierTree)(nil)
 
 // Cant grow, mostly intended for testing / vector generation
-func NewInMemoryVerifierTree(hasher hash.Hash, size uint64) *InMemoryVerifierTree {
+func NewInMemoryVerifierTree(hasher hash.Hash, initalSize uint64) *InMemoryVerifierTree {
 	return &InMemoryVerifierTree{
 		hasher: hasher,
-		nodes:  &InMemoryNodeStore{nodes: make([][]byte, size)},
+		nodes:  &InMemoryNodeStore{nodes: make([][]byte, initalSize)},
 		values: make(map[uint64][]byte),
 	}
 }
@@ -206,12 +193,25 @@ func (t *InMemoryVerifierTree) Root() ([]byte, error) {
 }
 
 func (t *InMemoryVerifierTree) MakeProof(i uint64) (*Proof, error) {
-	count, err := t.nodes.Size()
+	return makeProof(t.nodes, i)
+}
+
+func (t *InMemoryVerifierTree) VerifyProof(proof Proof) error {
+	return verifyPath(t.nodes, t.hasher, proof)
+}
+
+type NodeAppenderWithSize interface {
+	mmr.NodeAppender
+	Size() (uint64, error)
+}
+
+func makeProof(nodes NodeAppenderWithSize, i uint64) (*Proof, error) {
+	count, err := nodes.Size()
 	if err != nil {
 		return nil, err
 	}
 	mmrIndex := mmr.MMRIndex(i)
-	proof, err := mmr.InclusionProof(t.nodes, count-1, mmrIndex)
+	proof, err := mmr.InclusionProof(nodes, count-1, mmrIndex)
 	if err != nil {
 		return nil, err
 	}
@@ -222,16 +222,7 @@ func (t *InMemoryVerifierTree) MakeProof(i uint64) (*Proof, error) {
 	}, nil
 }
 
-func (t *InMemoryVerifierTree) VerifyProof(proof Proof) error {
-	return verifyPath(t.hasher, proof, t.nodes)
-}
-
-type NodeAppenderWithSize interface {
-	mmr.NodeAppender
-	Size() (uint64, error)
-}
-
-func verifyPath(hasher hash.Hash, proof Proof, tree NodeAppenderWithSize) error {
+func verifyPath(tree NodeAppenderWithSize, hasher hash.Hash, proof Proof) error {
 	count, err := tree.Size()
 	if err != nil {
 		return err
