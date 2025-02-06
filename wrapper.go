@@ -23,7 +23,8 @@ type VerifierTree interface {
 	GetValue(i uint64) ([]byte, error)
 	// GetNode returns the (hashed) node at the given index.
 	GetNode(i uint64) ([]byte, error)
-
+	// LeafCount returns the number of leaves in the tree.
+	LeafCount() (uint64, error)
 	// Root returns the root of the tree.
 	Root() ([]byte, error)
 	// MakeProof returns a proof that the value at the given index is in the tree.
@@ -102,6 +103,14 @@ func (t *PostgresVerifierTree) GetValue(i uint64) ([]byte, error) {
 	return value, nil
 }
 
+func (t *PostgresVerifierTree) LeafCount() (uint64, error) {
+	count, err := t.nodes.Size()
+	if err != nil {
+		return 0, err
+	}
+	return mmr.LeafCount(count), nil
+}
+
 func (t *PostgresVerifierTree) Root() ([]byte, error) {
 	count, err := t.nodes.Size()
 	if err != nil {
@@ -178,6 +187,14 @@ func (t *InMemoryVerifierTree) GetValue(i uint64) ([]byte, error) {
 		return nil, fmt.Errorf("value not found at index %d", i)
 	}
 	return value, nil
+}
+
+func (t *InMemoryVerifierTree) LeafCount() (uint64, error) {
+	count, err := t.nodes.Size()
+	if err != nil {
+		return 0, err
+	}
+	return mmr.LeafCount(count), nil
 }
 
 func (t *InMemoryVerifierTree) Root() ([]byte, error) {

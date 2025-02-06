@@ -75,6 +75,9 @@ func testWrapper(t *testing.T, tree pgmmr.VerifierTree) {
 		assert.Nil(t, err)
 		t.Logf("idx: %02d: %s", idx, input)
 		testValues[i] = testValue{idx: idx, val: input}
+		leafCount, err := tree.LeafCount()
+		assert.Nil(t, err)
+		assert.Equal(t, uint64(i+1), leafCount)
 	}
 
 	root, err := tree.Root()
